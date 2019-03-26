@@ -27,42 +27,48 @@ module Text.Megaparsec.TagSoup
   ) where
 
 import Data.Char (isSpace)
-import Data.List.NonEmpty (NonEmpty(..))
-import qualified Data.List.NonEmpty as NE
 import Data.Semigroup ((<>))
 import qualified Data.Set as Set
+import Data.List.NonEmpty (NonEmpty(..))
 import Text.HTML.TagSoup
 import Text.StringLike
-import Text.Megaparsec.Combinator
-import Text.Megaparsec.Error
-import Text.Megaparsec.Pos
-import Text.Megaparsec.Prim
+import Text.Megaparsec (Stream(..), Token, MonadParsec, Parsec, (<?>), token, skipMany, Pos, SourcePos(..), pos1, ErrorItem(..))
+import Data.Proxy
+import Data.List (foldl')
 
 -- | Different modules corresponding to various types of streams (@String@,
 -- @Text@, @ByteString@) define it differently, so user can use “abstract”
 -- @Parser@ type and easily change it by importing different “type
 -- modules”. This one is for TagSoup tags.
-type TagParser str = Parsec Dec [Tag str]
-
-instance (Show str) => ShowToken (Tag str) where
-    showTokens tags = unwords (NE.toList (NE.map show tags))
+type TagParser str = Parsec () [Tag str] --- Dec
 
 instance (Ord str) => Stream [Tag str] where
   type Token [Tag str] = Tag str
-  uncons [] = Nothing
-  uncons (t:ts) = Just (t, ts)
-  {-# INLINE uncons #-}
-  updatePos = const updatePosTag
-  {-# INLINE updatePos #-}
+  type Tokens [Tag str] = [Tag str]
+
+  tokenToChunk Proxy = pure
+  tokensToChunk Proxy = id
+  chunkToTokens Proxy = id
+  chunkLength Proxy = length
+  chunkEmpty Proxy = null
+  advance1 Proxy = updatePosTag
+  advanceN Proxy pos = foldl' (updatePosTag pos)
+  take1_ [] = Nothing
+  take1_ (t:ts) = Just (t, ts)
+  takeN_ n s
+    | n <= 0    = Just ([], s)
+    | null s    = Nothing
+    | otherwise = Just (splitAt n s)
+  takeWhile_ = span
 
 updatePosTag
   :: Pos                    -- ^ Tab width
   -> SourcePos              -- ^ Current position
   -> Tag str                -- ^ Current token
-  -> (SourcePos, SourcePos) -- ^ Actual position and incremented position
-updatePosTag _ apos@(SourcePos n l c) _ = (apos, npos)
+  -> SourcePos              -- ^ Incremented position
+updatePosTag _ (SourcePos n l c) _ = npos
   where
-    u = unsafePos 1
+    u = pos1
     npos = SourcePos n l (c <> u)
 
 -- | Parses a text block containing only characters which satisfy 'isSpace'.
@@ -98,7 +104,7 @@ satisfy :: (StringLike str, MonadParsec e s m, Token s ~ Tag str) => (Tag str ->
 satisfy f = lexeme $ token testTag Nothing
   where testTag x = if f x
                        then Right x
-                       else Left (Set.singleton (Tokens (x:|[])), Set.empty, Set.empty)
+                       else Left (Just (Tokens (x:|[])), Set.empty)
 
 -- | Parse any opening tag.
 -- As all the tag parsers, it consumes the whitespace immediately after the parsed tag.
